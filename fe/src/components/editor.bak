@@ -1,0 +1,157 @@
+import { useEffect, useRef, useState} from 'react';
+import * as monaco from 'monaco-editor';
+
+// Self-host Monaco Editor worker
+import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
+import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
+import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker';
+import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
+import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
+
+// Setup Monaco workers
+self.MonacoEnvironment = {
+  getWorker(_: any, label: string) {
+    if (label === 'json') return new jsonWorker();
+    if (label === 'css' || label === 'scss' || label === 'less') return new cssWorker();
+    if (label === 'html' || label === 'handlebars' || label === 'razor') return new htmlWorker();
+    if (label === 'typescript' || label === 'javascript') return new tsWorker();
+    return new editorWorker();
+  },
+};
+
+interface CodeCellProps {
+  initialCode?: string;
+  onExecute?: (code: string) => void;
+  onChange?: (code: string) => void;
+  readOnly?: boolean;
+  className?: string,
+  disabledKeybindings?: Array<{ key: number; modifier?: number }>;
+  // Future: kernel-aware completions
+  contextCompletions?: Array<{ label: string; kind: string; detail?: string }>;
+}
+
+export function CodeCell({
+  initialCode = '',
+  onExecute,
+  onChange,
+  readOnly = false,
+  className,
+  contextCompletions = [],
+  disabledKeybindings = [{key: monaco.KeyCode.KeyT, modifier: monaco.KeyMod.CtrlCmd}]
+}: CodeCellProps) {
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [code, setCode] = useState(initialCode);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    // Create editor instance
+    const editor = monaco.editor.create(containerRef.current, {
+      value: initialCode,
+      language: 'python',
+      theme: 'vs-light',
+      overviewRulerLanes: 0,
+      minimap: { enabled: false },
+      lineNumbers: 'off',
+      scrollBeyondLastLine: false,
+      automaticLayout: true,
+      readOnly,
+      fontSize: 14,
+      tabSize: 4,
+      insertSpaces: true,
+      // Jupyter-like shortcuts
+      contextmenu: true,
+      folding: false,
+      lineDecorationsWidth: 10,
+      lineNumbersMinChars: 3,
+      renderLineHighlight: 'none', // all
+      suggestOnTriggerCharacters: true,
+      quickSuggestions: {
+        other: true,
+        comments: false,
+        strings: false,
+      },
+      // TODO: this is to disable an error with quickly unmounting in react strict mode, can remove in prod
+      occurrencesHighlight: 'off',
+    });
+
+    editorRef.current = editor;
+    editor.focus()
+
+    disabledKeybindings.forEach(({ key, modifier }) => {
+      const keybinding = modifier ? modifier | key : key;
+      editor.addCommand(keybinding, () => {
+        // Empty handler - prevents Monaco from handling this key
+        return false;
+      });
+    });
+
+    // Handle code changes
+    editor.onDidChangeModelContent(() => {
+      const newCode = editor.getValue();
+      setCode(newCode);
+      onChange?.(newCode);
+    });
+
+    // Add Shift+Enter to execute
+    editor.addCommand(monaco.KeyMod.Shift | monaco.KeyCode.Enter, () => {
+      onExecute?.(editor.getValue());
+    });
+
+    // Add Ctrl+Enter to execute (alternative)
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
+      onExecute?.(editor.getValue());
+    });
+
+    // Cleanup
+    return () => {
+        editor.dispose();
+    };
+  }, []);
+
+  // Update editor when readOnly changes
+  useEffect(() => {
+    if (editorRef.current) {
+      editorRef.current.updateOptions({ readOnly });
+    }
+  }, [readOnly]);
+
+  // Register custom completions (for kernel-aware autocomplete later)
+  useEffect(() => {
+    if (contextCompletions.length === 0) return;
+
+    const disposable = monaco.languages.registerCompletionItemProvider('python', {
+      provideCompletionItems: (model, position) => {
+        const word = model.getWordUntilPosition(position);
+        const range = {
+          startLineNumber: position.lineNumber,
+          endLineNumber: position.lineNumber,
+          startColumn: word.startColumn,
+          endColumn: word.endColumn,
+        };
+
+        const suggestions = contextCompletions.map((item) => ({
+          label: item.label,
+          kind: monaco.languages.CompletionItemKind.Variable,
+          detail: item.detail,
+          insertText: item.label,
+          range,
+        }));
+
+        return { suggestions };
+      },
+    });
+
+    return () => disposable.dispose();
+  }, [contextCompletions]);
+
+  return (
+    <div
+    ref={containerRef}
+    className={className}
+    />
+  );
+}
+
+export default CodeCell;
