@@ -12,3 +12,4 @@ wheels/
 .env
 llm_queries/
 tmp.txt
+chats/*

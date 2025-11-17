@@ -1,6 +1,11 @@
 export type ManualMessageType = "text" | "code" | "query"
 type MessageType = ManualMessageType | "llm"
 
+export type Chat = {
+  id: string
+  messages: Message[]
+}
+
 type BaseMessage = {
   author: string
   content: string

@@ -1,7 +1,7 @@
 import os
 import json
 import httpx
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from . import mytypes
@@ -11,7 +11,11 @@ from queue import Empty
 from jupyter_client import KernelManager, KernelClient
 from typing import Literal
 from itertools import groupby
-from datetime import datetime, UTC
+from datetime import datetime
+from uuid import uuid4
+from pathlib import Path
+from tempfile import NamedTemporaryFile
+import shutil
 
 with open("/usr/share/dict/words") as f:
     words = [l.strip() for l in f.readlines()]
@@ -79,6 +83,14 @@ async def generate(query: list[dict[str,str]], msg_id: int, queue: asyncio.Queue
     #     phrase = " ".join(secrets.choice(words) for _ in range(n)) + ". "
     #     await queue.put({"id": msg_id, "result": "generation success", "content": phrase})
     #     await asyncio.sleep(.3)
+
+@app.get("/recent")
+async def get_recent_chats():
+    chat_dir = Path("chats")
+    # atime for accessed, mtime modified
+    all_chats = [(f.stat().st_mtime, f) for f in chat_dir.iterdir() if f.is_file()]
+    all_chats.sort(reverse=True)
+    return [c[1].stem for c in all_chats[:5]]
 
 def parse_msg(msg: dict):
     msg_type = msg['header']['msg_type']
@@ -168,9 +180,55 @@ def prepare_query(convs: list[Message | CodeMessage], query: str) -> list[dict[s
     turns.append({"role": "user", "content": query})
     return turns
 
-@app.websocket("/ws")
-async def websocket_endpoint(ws: WebSocket):
-    conversation: list[Message | CodeMessage] = []
+@app.post("/chats")
+async def create_chat():
+    chat_id = str(uuid4())
+    chat_path = Path(f"chats/{chat_id}.json")
+    with chat_path.open("w") as f:
+        json.dump({"messages": []}, f)
+    return {"id": chat_id, "messages": []}
+
+def get_chat(chat_id: str):
+    chat_path = Path(f"chats/{chat_id}.json")
+    if not chat_path.is_file():
+        return None
+    
+    with chat_path.open() as f:
+        chat = json.load(f)
+
+    chat["id"] = chat_id
+    return chat
+    
+@app.get("/chats/{chat_id}")
+async def get_chat_route(chat_id: str):
+    chat = get_chat(chat_id)
+    if chat is None:
+        raise HTTPException(404)
+    
+    return chat
+
+def write_chat(chat_id: str, messages: list[Message | CodeMessage]):
+    chat_path = Path(f"chats/{chat_id}.json")
+    with NamedTemporaryFile("w", delete_on_close=False) as f:
+        json.dump({"messages": [m.model_dump() for m in messages]}, f, indent=2, ensure_ascii=False)
+        f.close()
+        shutil.copy2(f.name, chat_path)        
+
+def to_messages(msgs: list[dict]) -> list[Message|CodeMessage]:
+    result = []
+    for msg in msgs:
+        cls = CodeMessage if msg["type"] == "code" else Message
+        result.append(cls.model_validate(msg))
+    return result
+
+@app.websocket("/ws/{chat_id}")
+async def websocket_endpoint(ws: WebSocket, chat_id: str):
+    chat = get_chat(chat_id)
+    if chat is None:
+        return
+
+    conversation: list[Message | CodeMessage] = to_messages(chat["messages"])
+
     await ws.accept()
     loop = asyncio.get_running_loop()
     queue = asyncio.Queue()
@@ -180,6 +238,11 @@ async def websocket_endpoint(ws: WebSocket):
     kc = km.client()
     kc.start_channels()
     kc.wait_for_ready()
+    async def save_chat():
+        while True:
+            await asyncio.sleep(10)
+            write_chat(chat_id, conversation)
+
     async def read_ws():
         nonlocal count
         try:
@@ -246,9 +309,10 @@ async def websocket_endpoint(ws: WebSocket):
 
     reader = asyncio.create_task(read_ws())
     writer = asyncio.create_task(write_ws())
+    saver = asyncio.create_task(save_chat())
 
     done, pending = await asyncio.wait(
-        [reader, writer],
+        [reader, writer, saver],
         return_when=asyncio.FIRST_COMPLETED,
     )
 
