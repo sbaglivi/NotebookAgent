@@ -3,48 +3,23 @@ import json
 import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from . import mytypes
 import asyncio
-import secrets
 from queue import Empty
 from jupyter_client import KernelManager, KernelClient
-from typing import Literal
 from itertools import groupby
 from datetime import datetime
 from uuid import uuid4
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 import shutil
+import threading
+import subprocess
+import lsp
 
+active_lsp = {}
 with open("/usr/share/dict/words") as f:
     words = [l.strip() for l in f.readlines()]
-
-class MessageBase(BaseModel):
-    type: mytypes.MessageType
-    content: str
-
-class MessageReq(MessageBase):
-    id: str
-    response_id: str | None = None
-
-class Message(MessageBase):
-    id: int
-
-    @classmethod
-    def from_message_req(cls, msg: MessageReq, id: int):
-        return cls(id=id, type=msg.type, content=msg.content)
-
-class CodeMessage(Message):
-    type: Literal["code"]
-    output: list
-    execution_status: str
-
-    @classmethod
-    def from_message(cls, msg: Message):
-        assert msg.type == "code", "CodeMessage should be built from msgs with type code"
-        return cls(**msg.model_dump(), output=[], execution_status="pending")
-
 
 # model = "moonshotai/kimi-k2-thinking"
 model = "minimax/minimax-m2"
@@ -147,7 +122,7 @@ def execute(code: str, id: str, kc: KernelClient, queue: asyncio.Queue, loop: as
         if out["type"] == "status" and out["content"] == "idle":
             break
 
-def prepare_query(convs: list[Message | CodeMessage], query: str) -> list[dict[str,str]]:
+def prepare_query(convs: list[mytypes.Message], query: str) -> list[dict[str,str]]:
     PROMPT = """
     Hello, your job is to assist users that are working on a jupyter-notebook like application.
     Be helpful, clear and help them solve their problem while learning new skills.
@@ -207,19 +182,97 @@ async def get_chat_route(chat_id: str):
     
     return chat
 
-def write_chat(chat_id: str, messages: list[Message | CodeMessage]):
+def write_chat(chat_id: str, messages: list[mytypes.Message]):
     chat_path = Path(f"chats/{chat_id}.json")
     with NamedTemporaryFile("w", delete_on_close=False) as f:
         json.dump({"messages": [m.model_dump() for m in messages]}, f, indent=2, ensure_ascii=False)
         f.close()
         shutil.copy2(f.name, chat_path)        
 
-def to_messages(msgs: list[dict]) -> list[Message|CodeMessage]:
+def to_messages(msgs: list[dict]) -> list[mytypes.Message]:
     result = []
     for msg in msgs:
-        cls = CodeMessage if msg["type"] == "code" else Message
+        cls = mytypes.CodeMessage if msg["type"] == "code" else mytypes.Message
         result.append(cls.model_validate(msg))
     return result
+
+def lsp_read(queue: asyncio.Queue, stdout):
+    for msg in lsp.reader(stdout):
+        # do something
+        def tmp(msg):
+            return ""
+        
+        a = tmp(msg)
+        # otherwise I'd need run_coroutine_threadsafe for queue.put
+        asyncio.get_event_loop().call_soon_threadsafe(queue.put_nowait(a))
+
+
+def send_msg(proc: subprocess.Popen, msg: dict):
+    body = json.dumps(msg)
+    header = f"Content-Length: {len(body)}\r\n\r\n"
+    proc.stdin.write(header.encode("utf-8"))
+    proc.stdin.write(body.encode("utf-8"))
+    proc.stdin.flush()
+
+@app.websocket("/ws/{chat_id}/lsp")
+async def websocket_ls(ws: WebSocket, chat_id: str):
+    """
+    changes should only be sent through 1 ws, the other 
+    didOpen
+    didChange (full text)
+    didClose
+    2. Requests
+    textDocument/completion
+    textDocument/hover
+    textDocument/signatureHelp (optional)
+    3. Notifications
+    publishDiagnostics
+    -- probably not
+    textDocument/definition
+    """
+    await ws.accept()
+    if chat_id not in active_lsp:
+        cmd = "/Users/emerald/p/ml/agent/be/.venv/bin/pyright-langserver --stdio"
+        proc = subprocess.Popen(
+            cmd.split(),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        q = asyncio.Queue()
+        active_lsp[chat_id] = [1, proc, q]
+    else:
+        count, proc, q = active_lsp[chat_id]
+        active_lsp[chat_id] = [count+1, proc, q]
+    t = threading.Thread(target=lsp_read, args=(q, proc.stdout), daemon=True)
+    t.start()
+    while True:
+        done, _ = await asyncio.wait(
+            {
+                asyncio.create_task(ws.receive_text()),  # from Monaco
+                asyncio.create_task(q.get()),        # from LS
+            },
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        for task in done:
+            msg = task.result()
+
+            if isinstance(msg, str):  
+                # from websocket → send to LS
+                # first parse it / validate it?
+                # msg = mytypes.MessageReq.model_validate_json(json_str)
+                # lsp.CompletionRequest.create()
+                def parse_me():
+                    return ""
+                parsed = parse_me()
+                # parse it into a valid msg
+                send_msg(parsed)
+
+            else:
+                # from LS → send to fe, which will parse what kind of thing it is and call something on monaco appropriately
+                await ws.send_json(msg)
+
 
 @app.websocket("/ws/{chat_id}")
 async def websocket_endpoint(ws: WebSocket, chat_id: str):
@@ -227,7 +280,7 @@ async def websocket_endpoint(ws: WebSocket, chat_id: str):
     if chat is None:
         return
 
-    conversation: list[Message | CodeMessage] = to_messages(chat["messages"])
+    conversation: list[mytypes.Message] = to_messages(chat["messages"])
 
     await ws.accept()
     loop = asyncio.get_running_loop()
@@ -248,17 +301,17 @@ async def websocket_endpoint(ws: WebSocket, chat_id: str):
         try:
             while True:
                 json_str = await ws.receive_text()
-                msg = MessageReq.model_validate_json(json_str)
+                msg = mytypes.MessageReq.model_validate_json(json_str)
                 if msg.type == mytypes.MessageType.LLM:
                     print("ERROR: received msg with type LLM")
                     continue
 
                 old_id = msg.id
                 response_id = msg.response_id
-                msg = Message.from_message_req(msg, count)
+                msg = mytypes.Message.from_message_req(msg, count)
                 count += 1
                 if msg.type == mytypes.MessageType.CODE:
-                    msg = CodeMessage.from_message(msg)
+                    msg = mytypes.CodeMessage.from_message(msg)
 
                 conversation.append(msg)
                 if msg.type == mytypes.MessageType.QUERY:
