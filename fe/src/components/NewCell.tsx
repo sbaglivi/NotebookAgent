@@ -1,10 +1,10 @@
-import {useState, useEffect, useRef, type MouseEvent, type KeyboardEvent} from 'react';
-import {type ManualMessageType} from "@/types"
+import { useState, useEffect, useRef, type MouseEvent, type KeyboardEvent } from 'react';
+import { type ManualMessageType } from "@/types"
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
-import { Editor, type EditorHandle} from "@/components/editor"
+import { Editor, type EditorHandle } from "@/components/editor"
 
-export function NewCell({onSubmit, baseUrl, chatId}: {onSubmit: (input: string, type: ManualMessageType) => void, baseUrl: string, chatId: string}) {
+export function NewCell({ onSubmit, baseUrl, chatId }: { onSubmit: (input: string, type: ManualMessageType) => void, baseUrl: string, chatId: string }) {
   const [input, setInput] = useState("")
   const [msgType, setMsgType] = useState<ManualMessageType>("text")
   const editorRef = useRef<EditorHandle>(null)
@@ -20,36 +20,36 @@ export function NewCell({onSubmit, baseUrl, chatId}: {onSubmit: (input: string, 
     handleSubmit()
   }
 
-    const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-        const isEnter = e.key === 'Enter' || (e as any).keyCode === 13;
-        const isModifier = e.ctrlKey || e.metaKey; // ctrl on Windows/Linux, meta (Command) on macOS
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const isEnter = e.key === 'Enter' || (e as any).keyCode === 13;
+    const isModifier = e.ctrlKey || e.metaKey; // ctrl on Windows/Linux, meta (Command) on macOS
 
-        if (!isModifier) {
-            return
-        }
-
-        if (isEnter) {
-            e.preventDefault(); 
-            console.log("enter + modifier", input, msgType)
-            handleSubmit()
-        } else if (e.key == "t") {
-            e.preventDefault()
-            setMsgType(msgType => {
-                const typeCycle: Record<ManualMessageType, ManualMessageType> = {
-                    "code": "text",
-                    "text": "query",
-                    "query": "code"
-                };
-                const nextType = typeCycle[msgType];
-                console.debug(`cycling from ${msgType} to ${nextType}`);
-                return nextType;
-            });
-        }
+    if (!isModifier) {
+      return
     }
 
-  let inputField = <Textarea className="h-30" value={input} onChange={e => setInput(e.target.value)} name="message" autoFocus/>
+    if (isEnter) {
+      e.preventDefault();
+      console.log("enter + modifier", input, msgType)
+      handleSubmit()
+    } else if (e.key == "t") {
+      e.preventDefault()
+      setMsgType(msgType => {
+        const typeCycle: Record<ManualMessageType, ManualMessageType> = {
+          "code": "text",
+          "text": "query",
+          "query": "code"
+        };
+        const nextType = typeCycle[msgType];
+        console.debug(`cycling from ${msgType} to ${nextType}`);
+        return nextType;
+      });
+    }
+  }
+
+  let inputField = <Textarea className="h-30" value={input} onChange={e => setInput(e.target.value)} name="message" autoFocus />
   if (msgType === "code") {
-    inputField = <Editor ref={editorRef} onChange={(text: string) => setInput(text)} initialCode={input} baseUrl={baseUrl} chatId={chatId}/>
+    inputField = <Editor ref={editorRef} onChange={(text: string) => setInput(text)} initialCode={input} baseUrl={baseUrl} chatId={chatId} uri={`${chatId}_pending`} />
   }
 
   return (

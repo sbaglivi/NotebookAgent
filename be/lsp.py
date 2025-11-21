@@ -35,15 +35,18 @@ class TextDocumentItem(TextDocumentItemSmall):
 
 class NotebookDoc(BaseModel):
     uri: str # chat_id
-    notebookType: str = "own" # ? python
+    notebookType: str = "jupyter-notebook"
     version: int # increases when insert, delete, reorder cells, not just modify cell
     cells: list[Cell]
-    cellTextDocuments: list[TextDocumentItem]
+    # cellTextDocuments removed as it's not part of NotebookDocument
 
 def cid(chat_id: str, cell_id: int) -> str:
-    return f"{chat_id}_{cell_id}"
+    return f"file:///{chat_id}_cell_{cell_id}.py"
 
-def build_notebook(chat_id: str, version: int, msgs: list[mytypes.Message]) -> NotebookDoc:
+def pending_cid(chat_id: str) -> str:
+    return f"file:///{chat_id}_pending.py"
+
+def build_notebook(chat_id: str, version: int, msgs: list[mytypes.Message]) -> tuple[NotebookDoc, list[TextDocumentItem]]:
     cells = []
     cell_docs = []
     for msg in msgs:
@@ -53,13 +56,15 @@ def build_notebook(chat_id: str, version: int, msgs: list[mytypes.Message]) -> N
         cells.append(Cell(document=doc_id))
         cell_docs.append(TextDocumentItem(uri=doc_id, version=msg.version, text=msg.content))
     
-    return NotebookDoc(uri=chat_id, version=version, cells=cells, cellTextDocuments=cell_docs)
+    return NotebookDoc(uri=f"file:///{chat_id}.ipynb", version=version, cells=cells), cell_docs
 
 class Method(StrEnum):
   OPEN = "textDocument/didOpen"
   CHANGE = "textDocument/didChange"
   HOVER = "textDocument/hover"
   COMPLETION = "textDocument/completion"
+  NOTEBOOK_OPEN = "notebookDocument/didOpen"
+  NOTEBOOK_CHANGE = "notebookDocument/didChange"
 
 class JSONMessage(BaseModel):
   jsonrpc: Literal["2.0"] = "2.0"
@@ -140,7 +145,89 @@ class CompletionRequest(JSONMessage):
 class InitParams(BaseModel):
   process_id: int | None = None
   rootUri: str = "file:///"
-  capabilities: dict = {"textDocument": {}}
+  capabilities: dict = {
+      "textDocument": {},
+      "notebookDocument": {
+          "synchronization": {
+              "dynamicRegistration": True,
+              "executionSummarySupport": True
+          }
+      }
+  }
+
+class NotebookOpenParams(BaseModel):
+    notebookDocument: NotebookDoc
+    cellTextDocuments: list[TextDocumentItem]
+
+    @classmethod
+    def create(cls, notebook: NotebookDoc, cell_docs: list[TextDocumentItem]):
+        return cls(notebookDocument=notebook, cellTextDocuments=cell_docs)
+
+class NotebookOpenRequest(JSONMessage):
+    method: Literal[Method.NOTEBOOK_OPEN] = Method.NOTEBOOK_OPEN
+    params: NotebookOpenParams
+
+    @classmethod
+    def create(cls, notebook: NotebookDoc, cell_docs: list[TextDocumentItem]):
+        return cls(params=NotebookOpenParams.create(notebook, cell_docs))
+
+class NotebookCellTextDocumentFilter(BaseModel):
+    notebook: Any # NotebookDocumentFilter
+
+class NotebookDocumentFilter(BaseModel):
+    notebookType: str
+    scheme: str | None = None
+    pattern: str | None = None
+
+class NotebookCellStructure(BaseModel):
+    cell: Cell
+    kind: Literal[2] = 2
+    didOpen: list[TextDocumentItem] | None = None
+    didClose: list[TextDocumentItemMin] | None = None
+
+class NotebookDocumentStructureChange(BaseModel):
+    start: int
+    deleteCount: int
+    cells: list[NotebookCellStructure] | None = None
+
+class NotebookDocumentChangeEvent(BaseModel):
+    structure: NotebookDocumentStructureChange | None = None
+    textContent: Any | None = None # NotebookDocumentCellContentChange
+
+class VersionedNotebookDocumentIdentifier(BaseModel):
+    version: int
+    uri: str
+
+class NotebookChangeParams(BaseModel):
+    notebookDocument: VersionedNotebookDocumentIdentifier
+    change: NotebookDocumentChangeEvent
+
+    @classmethod
+    def create(cls, uri: str, version: int, start: int, delete_count: int, new_cells: list[Cell], new_docs: list[TextDocumentItem]):
+        # Structure change
+        struct_cells = []
+        for cell, doc in zip(new_cells, new_docs):
+            struct_cells.append(NotebookCellStructure(cell=cell, didOpen=[doc]))
+        
+        change = NotebookDocumentChangeEvent(
+            structure=NotebookDocumentStructureChange(
+                start=start,
+                deleteCount=delete_count,
+                cells=struct_cells
+            )
+        )
+        return cls(
+            notebookDocument=VersionedNotebookDocumentIdentifier(uri=uri, version=version),
+            change=change
+        )
+
+class NotebookChangeRequest(JSONMessage):
+    method: Literal[Method.NOTEBOOK_CHANGE] = Method.NOTEBOOK_CHANGE
+    params: NotebookChangeParams
+
+    @classmethod
+    def create(cls, uri: str, version: int, start: int, delete_count: int, new_cells: list[Cell], new_docs: list[TextDocumentItem]):
+        return cls(params=NotebookChangeParams.create(uri, version, start, delete_count, new_cells, new_docs))
 
 def reader(stdout):
     buffer = b""
@@ -175,7 +262,7 @@ def reader(stdout):
             except Exception:
                 print("Invalid JSON:", body)
 
-def create_proc():
+def create_proc(root_dir: str, init_params: InitParams):
   BASE_DIR = Path(__file__).parent
   cmd = f"{BASE_DIR}/.venv/bin/pyright-langserver --stdio"
   proc = subprocess.Popen(
@@ -186,15 +273,9 @@ def create_proc():
   )
   initialize = {
     "jsonrpc": "2.0",
-    "id": 1,
+    "id": 0,
     "method": "initialize",
-    "params": {
-      "processId": None,
-      "rootUri": "file:///",
-      "capabilities": {
-          "textDocument": {}
-      }
-    }
+    "params": init_params.model_dump()
   }
 
   send_msg(proc, initialize)
@@ -209,6 +290,7 @@ def create_proc():
 
 def send_msg(proc: subprocess.Popen, msg: dict):
     body = json.dumps(msg)
+    print(f"LSP SEND: {body}")
     header = f"Content-Length: {len(body)}\r\n\r\n"
     proc.stdin.write(header.encode("utf-8"))
     proc.stdin.write(body.encode("utf-8"))
