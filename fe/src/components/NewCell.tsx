@@ -4,7 +4,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 import { Editor, type EditorHandle} from "@/components/editor"
 
-export function NewCell({onSubmit}: {onSubmit: (input: string, type: ManualMessageType) => void}) {
+export function NewCell({onSubmit, baseUrl, chatId}: {onSubmit: (input: string, type: ManualMessageType) => void, baseUrl: string, chatId: string}) {
   const [input, setInput] = useState("")
   const [msgType, setMsgType] = useState<ManualMessageType>("text")
   const editorRef = useRef<EditorHandle>(null)
@@ -49,7 +49,7 @@ export function NewCell({onSubmit}: {onSubmit: (input: string, type: ManualMessa
 
   let inputField = <Textarea className="h-30" value={input} onChange={e => setInput(e.target.value)} name="message" autoFocus/>
   if (msgType === "code") {
-    inputField = <Editor ref={editorRef} onChange={(text: string) => setInput(text)} initialCode={input}/>
+    inputField = <Editor ref={editorRef} onChange={(text: string) => setInput(text)} initialCode={input} baseUrl={baseUrl} chatId={chatId}/>
   }
 
   return (

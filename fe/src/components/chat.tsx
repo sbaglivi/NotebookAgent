@@ -4,7 +4,6 @@ import { v4 as uuidv4 } from 'uuid';
 import { NewCell } from '@/components/NewCell';
 import { MessageBubble } from '@/components/messageBubble';
 
-
 export function ChatComponent({initialMessages, id, baseUrl}: {initialMessages: Message[], id: string, baseUrl: string}) {
   const [messages, setMessages] = useState<Message[]>(() => initialMessages)
   const wsRef = useRef<WebSocket | null>(null)
@@ -137,7 +136,7 @@ export function ChatComponent({initialMessages, id, baseUrl}: {initialMessages: 
           messages.map(m => MessageBubble(m))
         }
       </div>
-      <NewCell onSubmit={sendMessage} />
+      <NewCell onSubmit={sendMessage} baseUrl={baseUrl} chatId={id}/>
     </div>
   )
 
