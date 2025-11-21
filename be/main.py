@@ -15,7 +15,7 @@ from tempfile import NamedTemporaryFile
 import shutil
 import threading
 import subprocess
-import lsp
+from . import lsp
 
 active_lsp = {}
 with open("/usr/share/dict/words") as f:
@@ -207,38 +207,14 @@ def lsp_read(queue: asyncio.Queue, stdout):
         asyncio.get_event_loop().call_soon_threadsafe(queue.put_nowait(a))
 
 
-def send_msg(proc: subprocess.Popen, msg: dict):
-    body = json.dumps(msg)
-    header = f"Content-Length: {len(body)}\r\n\r\n"
-    proc.stdin.write(header.encode("utf-8"))
-    proc.stdin.write(body.encode("utf-8"))
-    proc.stdin.flush()
-
 @app.websocket("/ws/{chat_id}/lsp")
 async def websocket_ls(ws: WebSocket, chat_id: str):
-    """
-    changes should only be sent through 1 ws, the other 
-    didOpen
-    didChange (full text)
-    didClose
-    2. Requests
-    textDocument/completion
-    textDocument/hover
-    textDocument/signatureHelp (optional)
-    3. Notifications
-    publishDiagnostics
-    -- probably not
-    textDocument/definition
-    """
     await ws.accept()
+    __file__
     if chat_id not in active_lsp:
-        cmd = "/Users/emerald/p/ml/agent/be/.venv/bin/pyright-langserver --stdio"
-        proc = subprocess.Popen(
-            cmd.split(),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
+        proc = lsp.create_proc()
+        req = lsp.OpenRequest.create(chat_id, "")
+        lsp.send_msg(proc, req.model_dump())
         q = asyncio.Queue()
         active_lsp[chat_id] = [1, proc, q]
     else:
@@ -246,32 +222,40 @@ async def websocket_ls(ws: WebSocket, chat_id: str):
         active_lsp[chat_id] = [count+1, proc, q]
     t = threading.Thread(target=lsp_read, args=(q, proc.stdout), daemon=True)
     t.start()
-    while True:
-        done, _ = await asyncio.wait(
-            {
-                asyncio.create_task(ws.receive_text()),  # from Monaco
-                asyncio.create_task(q.get()),        # from LS
-            },
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+    try:
+        while True:
+            done, _ = await asyncio.wait(
+                {
+                    asyncio.create_task(ws.receive_text()),  # from Monaco
+                    asyncio.create_task(q.get()),        # from LS
+                },
+                return_when=asyncio.FIRST_COMPLETED,
+            )
 
-        for task in done:
-            msg = task.result()
+            for task in done:
+                msg = task.result()
 
-            if isinstance(msg, str):  
-                # from websocket → send to LS
-                # first parse it / validate it?
-                # msg = mytypes.MessageReq.model_validate_json(json_str)
-                # lsp.CompletionRequest.create()
-                def parse_me():
-                    return ""
-                parsed = parse_me()
-                # parse it into a valid msg
-                send_msg(parsed)
+                if isinstance(msg, str):  
+                    # from websocket → send to LS
+                    # first parse it / validate it?
+                    # msg = mytypes.MessageReq.model_validate_json(json_str)
+                    # lsp.CompletionRequest.create()
+                    new_text = ""
+                    version = 1 # not sure if I can just ignore it for now 
+                    change_req = lsp.ChangeRequest.create(chat_id, new_text, version)
+                    lsp.send_msg(change_req.model_dump())
 
-            else:
-                # from LS → send to fe, which will parse what kind of thing it is and call something on monaco appropriately
-                await ws.send_json(msg)
+                else:
+                    print(msg)
+                    # from LS → send to fe, which will parse what kind of thing it is and call something on monaco appropriately
+                    # await ws.send_json(msg)
+    finally:
+        count, proc, q = active_lsp[chat_id]
+        if count == 1:
+            proc.kill()
+            del active_lsp[chat_id]
+        else:
+            active_lsp[chat_id] = [count-1, proc, q]
 
 
 @app.websocket("/ws/{chat_id}")

@@ -3,9 +3,12 @@ from typing import Literal, Any
 from . import mytypes
 from enum import StrEnum
 import json
+import time
+from pathlib import Path
+import subprocess
 
 class LRRequest(BaseModel):
-    type: Literal["completion" | "hover" | "signature" | "change"] # send diagnostic, but only be -> fe
+    type: Literal["completion", "hover", "signature", "change"] # send diagnostic, but only be -> fe
 
 
 class Cell(BaseModel):
@@ -67,7 +70,7 @@ class JSONRequest(JSONMessage):
   params: Any
 
   # "method": "textDocument/didOpen",
-class OpenParams:
+class OpenParams(BaseModel):
   textDocument: TextDocumentItem
 
   @classmethod
@@ -137,7 +140,7 @@ class CompletionRequest(JSONMessage):
 class InitParams(BaseModel):
   process_id: int | None = None
   rootUri: str = "file:///"
-  capabilities = {"textDocument": {}}
+  capabilities: dict = {"textDocument": {}}
 
 def reader(stdout):
     buffer = b""
@@ -171,3 +174,42 @@ def reader(stdout):
                 yield msg
             except Exception:
                 print("Invalid JSON:", body)
+
+def create_proc():
+  BASE_DIR = Path(__file__).parent
+  cmd = f"{BASE_DIR}/.venv/bin/pyright-langserver --stdio"
+  proc = subprocess.Popen(
+      cmd.split(),
+      stdin=subprocess.PIPE,
+      stdout=subprocess.PIPE,
+      stderr=subprocess.PIPE,
+  )
+  initialize = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+      "processId": None,
+      "rootUri": "file:///",
+      "capabilities": {
+          "textDocument": {}
+      }
+    }
+  }
+
+  send_msg(proc, initialize)
+  time.sleep(0.2)
+
+  send_msg(proc, {
+    "jsonrpc": "2.0",
+    "method": "initialized",
+    "params": {}
+  })
+  return proc
+
+def send_msg(proc: subprocess.Popen, msg: dict):
+    body = json.dumps(msg)
+    header = f"Content-Length: {len(body)}\r\n\r\n"
+    proc.stdin.write(header.encode("utf-8"))
+    proc.stdin.write(body.encode("utf-8"))
+    proc.stdin.flush()
