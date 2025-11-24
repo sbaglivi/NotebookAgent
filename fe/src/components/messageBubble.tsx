@@ -5,7 +5,7 @@ import type {Output, Message} from '@/types'
 
 export function MessageBubble(msg: Message) {
   return (
-    <div key={msg.id} className="border-1 rounded-sm p-1">
+    <div key={msg.id} className="border-1 rounded-sm p-1 bg-white">
       <div className="relative h-8">
         <strong className="absolute left-2 top-1">{msg.author}</strong>
         <span className="absolute right-2 top-1">{msg.type}{getStatus(msg)}</span>
@@ -33,6 +33,10 @@ function MarkdownRenderer({ text }: {text: string}) {
 }
 
 function CodeOutput({output, className}: {output: Output[], className: string}) {
+  if (output.length === 0) {
+    return null;
+  }
+
   function renderOut(out: Output) {
     if (out.type == "stream") {
       const isStdErr = out.content.name == "stderr"

@@ -22,14 +22,6 @@ BASE_DIR = Path(__file__).parent
 CHATS_DIR = BASE_DIR / "chats"
 CHATS_DIR.mkdir(exist_ok=True)
 
-with open("/usr/share/dict/words") as f:
-    words = [l.strip() for l in f.readlines()]
-
-# model = "moonshotai/kimi-k2-thinking"
-model = "minimax/minimax-m2"
-router_key = os.getenv("OPENROUTER_KEY")
-# "openai/gpt-4o"
-
 origins = ["http://localhost:5173", "ws://localhost:5173"]
 app = FastAPI()
 app.add_middleware(
@@ -52,12 +44,6 @@ async def generate(query: list[dict[str,str]], msg_id: int, queue: asyncio.Queue
     query.append({"role": "assistant", "content": response})
     with open("llm_queries/"+fname, "w") as f:
         json.dump(query, f)
-    
-    # for _ in range(6):
-    #     n = secrets.randbelow(8) + 4
-    #     phrase = " ".join(secrets.choice(words) for _ in range(n)) + ". "
-    #     await queue.put({"id": msg_id, "result": "generation success", "content": phrase})
-    #     await asyncio.sleep(.3)
 
 @app.get("/recent")
 async def get_recent_chats():
@@ -248,6 +234,7 @@ async def websocket_ls(ws: WebSocket, chat_id: str):
 
             if ls_task in done:
                 msg = ls_task.result()
+                print("DEBUG: LSP message to send to frontend:", msg)
                 ls_task = asyncio.create_task(q.get())
                 await ws.send_json(msg)
 
@@ -359,12 +346,8 @@ async def websocket_endpoint(ws: WebSocket, chat_id: str):
         await manager.disconnect(chat_id)
 
 
-prompt = """
-Hi, the other day something that looked very similar to a jupyter notebook, but with AI integration: any block could optionally be an 
-LLM invocation which, besides the immediate prompt, would contain as context the whole notebook content up to that point. Do you think
-we can build something similar?
-"""
 async def invoke_streaming_llm(messages: list[dict[str,str]]):
+    router_key = os.getenv("OPENROUTER_API_KEY")
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
     "Authorization": f"Bearer {router_key}",
@@ -372,7 +355,7 @@ async def invoke_streaming_llm(messages: list[dict[str,str]]):
     }
 
     payload = {
-        "model": model,
+        "model": "minimax/minimax-m2",
         "messages": messages,
         "stream": True
     }

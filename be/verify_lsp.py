@@ -15,7 +15,7 @@ async def test_lsp():
         print(f"Created chat: {chat_id}")
 
     # 1.5 Pre-populate chat with a code cell
-    chat_file = Path(f"be/chats/{chat_id}.json")
+    chat_file = Path(f"chats/{chat_id}.json")
     with open(chat_file, "r") as f:
         chat_data = json.load(f)
     
@@ -58,13 +58,13 @@ async def test_lsp():
                     "uri": pending_uri,
                     "version": 2
                 },
-                "contentChanges": [{"text": "x."}]
+                "contentChanges": [{"text": "x = 100\nx."} ]
             }
         }
         await lsp_ws.send(json.dumps(did_change))
         
         # Request completion
-        req_id = 2
+        req_id = 1
         completion_req = {
             "jsonrpc": "2.0",
             "id": req_id,
@@ -74,7 +74,7 @@ async def test_lsp():
                     "uri": pending_uri
                 },
                 "position": {
-                    "line": 0,
+                    "line": 1,
                     "character": 2
                 }
             }
@@ -92,6 +92,9 @@ async def test_lsp():
                 print(f"Received completion response: {resp}")
                 items = resp.get("result", {}).get("items", [])
                 print(f"Got {len(items)} completion items")
+                with open("tmp.txt", "w") as f:
+                    for i in items:
+                        f.write(f"{i['label']}\n")
                 
                 found = False
                 for item in items:
@@ -108,3 +111,4 @@ async def test_lsp():
 
 if __name__ == "__main__":
     asyncio.run(test_lsp())
+    x = 100

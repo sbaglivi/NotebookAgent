@@ -7,7 +7,8 @@ type EditorProps = {
   onChange: (text: string) => void,
   baseUrl: string,
   chatId: string,
-  uri: string
+  uri: string,
+  rotateMsgType: () => void,
 }
 window.MonacoEnvironment = {
   getWorker(_, label) {
@@ -26,7 +27,7 @@ export interface EditorHandle {
   clear: () => void
 }
 
-export const Editor = forwardRef<EditorHandle, EditorProps>(({ initialCode, onChange, baseUrl, chatId, uri }: EditorProps, ref) => {
+export const Editor = forwardRef<EditorHandle, EditorProps>(({ initialCode, onChange, baseUrl, chatId, uri , rotateMsgType}: EditorProps, ref) => {
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const domRef = useRef<HTMLDivElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null)
@@ -46,6 +47,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({ initialCode, onCh
 
     ws.onmessage = (event) => {
       const msg = JSON.parse(event.data);
+      console.debug("LSP WebSocket message received:", msg);
       if (msg.id !== undefined && (msg.result !== undefined || msg.error !== undefined)) {
         // LSP response
         lspManager.handleMessage(msg);
@@ -97,7 +99,26 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({ initialCode, onCh
       lineDecorationsWidth: 8,
       folding: false,
       padding: { top: 8, bottom: 8 },
-      quickSuggestions: false
+      quickSuggestions: false,
+      scrollbar: {
+        vertical: 'visible',
+        horizontal: 'hidden',
+        useShadows: false,
+        verticalScrollbarSize: 6,
+        verticalSliderSize: 6,
+        horizontalScrollbarSize: 6,
+        horizontalSliderSize: 6,
+        arrowSize: 0,
+      }
+    });
+
+    editor.onKeyDown(e => {
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.code === "KeyT") {
+        e.preventDefault();
+        e.stopPropagation();
+        rotateMsgType()
+        return;
+      }
     });
 
     editor.focus()
@@ -132,9 +153,14 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({ initialCode, onCh
   }, []);
 
   return (
-    <div
-      ref={domRef}
-      className="h-30 border-1 rounded-sm overflow-hidden"
-    />
+    <div className="rounded-sm border h-30 bg-white">
+      <div className="p-2 h-full">
+        {/* Monaco anchor: nearest positioned ancestor */}
+        <div className="relative h-full overflow-visible pr-20">
+          {/* The actual Monaco mount point */}
+          <div ref={domRef} className="w-full h-full overflow-visible"></div>
+        </div>
+      </div>
+    </div>
   );
 });

@@ -30,10 +30,13 @@ class LSPManager {
         monaco.languages.registerCompletionItemProvider('python', {
             triggerCharacters: ['.'],
             provideCompletionItems: async (model, position) => {
-                const uri = model.uri.toString();
+                const uri = model.uri.toString() // .replace('file:///', '');
                 const ws = this.sockets.get(uri);
+                console.log(uri)
+                console.log(this.sockets)
                 if (!ws) return { suggestions: [] };
 
+                console.log("Requesting completions from LSP for", position.lineNumber, position.column);
                 const id = this.reqId++;
                 const req = {
                     jsonrpc: "2.0",
@@ -51,6 +54,7 @@ class LSPManager {
                 return new Promise<any>((resolve) => {
                     this.pendingRequests.set(id, (response) => {
                         const items = response.result?.items || [];
+                        console.debug("Received completions from LSP:", items);
                         resolve({
                             suggestions: items.map((item: any) => ({
                                 label: item.label,
@@ -66,7 +70,7 @@ class LSPManager {
         });
 
         monaco.languages.registerHoverProvider('python', {
-            provideHover: async (model, position) => {
+            provideHover: (model, position) => {
                 const uri = model.uri.toString();
                 const ws = this.sockets.get(uri);
                 if (!ws) return null;

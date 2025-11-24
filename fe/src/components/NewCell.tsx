@@ -34,6 +34,11 @@ export function NewCell({ onSubmit, baseUrl, chatId }: { onSubmit: (input: strin
       handleSubmit()
     } else if (e.key == "t") {
       e.preventDefault()
+      rotateMsgType()
+    }
+  }
+
+  function rotateMsgType() {
       setMsgType(msgType => {
         const typeCycle: Record<ManualMessageType, ManualMessageType> = {
           "code": "text",
@@ -45,11 +50,10 @@ export function NewCell({ onSubmit, baseUrl, chatId }: { onSubmit: (input: strin
         return nextType;
       });
     }
-  }
 
   let inputField = <Textarea className="h-30" value={input} onChange={e => setInput(e.target.value)} name="message" autoFocus />
   if (msgType === "code") {
-    inputField = <Editor ref={editorRef} onChange={(text: string) => setInput(text)} initialCode={input} baseUrl={baseUrl} chatId={chatId} uri={`${chatId}_pending`} />
+    inputField = <Editor ref={editorRef} onChange={(text: string) => setInput(text)} initialCode={input} baseUrl={baseUrl} chatId={chatId} uri={`file:///${chatId}_pending.py`} rotateMsgType={rotateMsgType}/>
   }
 
   return (
