@@ -89,7 +89,7 @@ def parse_msg(msg: dict):
 
     return None
 
-def execute(code: str, id: str, kc: KernelClient, queue: asyncio.Queue, loop: asyncio.EventLoop):
+def execute(code: str, id: int, kc: KernelClient, queue: asyncio.Queue, loop: asyncio.EventLoop):
     _msg_id = kc.execute(code)
     while True:
         try:
@@ -97,11 +97,11 @@ def execute(code: str, id: str, kc: KernelClient, queue: asyncio.Queue, loop: as
         except (TimeoutError, Empty):
             continue
 
+        print("kernel", id, msg)
         out = parse_msg(msg)
         if out is None:
             continue
 
-        print(out)
         out.update({"id": id, "result": "code execution"})
         asyncio.run_coroutine_threadsafe(queue.put(out), loop)
         if out["type"] == "status" and out["content"] == "idle":
@@ -226,6 +226,13 @@ async def websocket_ls(ws: WebSocket, chat_id: str):
                     if isinstance(msg, str):  
                         try:
                             msg_dict = json.loads(msg)
+                            method = msg_dict.get("method", "")
+                            if method in ["textDocument/completion", "textDocument/hover"]:
+                                msg_dict["params"]["position"]["line"] += session.cur_offset
+                            elif method == "textDocument/didChange":
+                                cur_cell = msg_dict["params"]["contentChanges"][0]["text"]
+                                full = session.single_doc + "\n" + cur_cell
+                                msg_dict["params"]["contentChanges"][0]["text"] = full
                             lsp.send_msg(proc, msg_dict)
                         except json.JSONDecodeError:
                             print("Invalid JSON from frontend LSP websocket")
@@ -234,7 +241,8 @@ async def websocket_ls(ws: WebSocket, chat_id: str):
 
             if ls_task in done:
                 msg = ls_task.result()
-                print("DEBUG: LSP message to send to frontend:", msg)
+                if 'id' in msg:
+                    print("DEBUG: LSP message to send to frontend:", msg['id'], str(msg.get('result'))[:40])
                 ls_task = asyncio.create_task(q.get())
                 await ws.send_json(msg)
 
@@ -262,7 +270,7 @@ async def websocket_endpoint(ws: WebSocket, chat_id: str):
     
     loop = asyncio.get_running_loop()
     queue = asyncio.Queue()
-    count = 0
+    count = len(chat["messages"])
     
     # km = KernelManager() ... removed
     
@@ -314,7 +322,7 @@ async def websocket_endpoint(ws: WebSocket, chat_id: str):
                 if msg.get("result", "") == "code execution":
                     to_update = [c for c in conversation if c.id == msg["id"]]
                     if len(to_update) != 1:
-                        print("ERROR: len of items to update for code ex is not 1")
+                        print(f"ERROR: len of items to update for code ex is not 1: {msg['id']} - {to_update}")
                     else:
                         to_update = to_update[0]
                         if msg["type"] == "status": 

@@ -1,5 +1,11 @@
 # NotebookAgent
 
+In order to fix some issues, I think I need to refactor some key systems in the application. I think the whole notebook state, including cell changes, execution status etc 
+should probably live in a centralized spot (what right now is the notebook manager).
+Right now I have another project with a deadline that I want to work on, so I'll probably come back to this when I have more time.
+Second to last commit should have completions and hover working correctly through the LSP on new code cells, but they weren't properly using the context from earlier
+cells because apparently pyright does not fully support the LSP specification for notebooks.
+
 ## Todo
 - fix LLM output rendering, use marked to convert to HTML
 - improve how notebook context is formatted for LLM queries

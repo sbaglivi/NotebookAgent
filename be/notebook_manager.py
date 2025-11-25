@@ -7,6 +7,17 @@ from typing import Optional
 import json
 import os
 
+def create_map(msgs: list[mytypes.Message]):
+    result = {}
+    offset = 0
+    for msg in msgs:
+        if msg.type != "code":
+            continue
+        lines = msg.content.count("\n") + 1
+        result[msg.id] = {"offset": offset, "content": msg.content}
+        offset += lines
+    return result, offset
+
 class NotebookSession:
     def __init__(self, chat_id: str):
         self.chat_id = chat_id
@@ -41,19 +52,9 @@ class NotebookSession:
         ))
         self.ls_queue = asyncio.Queue()
         
-        # Initialize LS with Notebook
-        notebook, cell_docs = lsp.build_notebook(self.chat_id, self.notebook_version, initial_messages)
-        
-        # Add pending cell
+        self.offset_map, self.cur_offset = create_map(initial_messages)
+        self.single_doc = "\n".join(msg.content for msg in initial_messages if msg.type == "code")
         pending_uri = lsp.pending_cid(self.chat_id)
-        notebook.cells.append(lsp.Cell(document=pending_uri))
-        cell_docs.append(lsp.TextDocumentItem(uri=pending_uri, text="", version=1))
-        
-        self.cell_count = len(notebook.cells)
-        
-        req = lsp.NotebookOpenRequest.create(notebook, cell_docs)
-        lsp.send_msg(self.ls_proc, req.model_dump())
-
         # Send didOpen for pending cell
         did_open = {
             "jsonrpc": "2.0",
@@ -63,11 +64,12 @@ class NotebookSession:
                     "uri": pending_uri,
                     "languageId": "python",
                     "version": 1,
-                    "text": ""
+                    "text": self.single_doc + "\n"
                 }
             }
         }
         lsp.send_msg(self.ls_proc, did_open)
+        self.kc.execute(self.single_doc)
 
         # Start LS reader thread
         loop = asyncio.get_running_loop()
@@ -82,22 +84,10 @@ class NotebookSession:
         if msg.type != "code":
             return
         
-        doc_id = lsp.cid(self.chat_id, msg.id)
-        new_cell = lsp.Cell(document=doc_id)
-        new_doc = lsp.TextDocumentItem(uri=doc_id, version=msg.version, text=msg.content)
-        
-        # Insert before pending cell (last one)
-        insert_index = self.cell_count - 1
-        
-        self.notebook_version += 1
-        req = lsp.NotebookChangeRequest.create(
-            uri=f"file:///{self.chat_id}.ipynb",
-            version=self.notebook_version,
-            start=insert_index,
-            delete_count=0,
-            new_cells=[new_cell],
-            new_docs=[new_doc]
-        )
+        self.offset_map[msg.id] = {"offset": self.cur_offset, "content": msg.content}
+        self.cur_offset += msg.content.count("\n") + 1
+        self.single_doc += "\n" + msg.content
+        req = lsp.ChangeRequest.create(lsp.pending_cid(self.chat_id), self.single_doc, version=1)
         lsp.send_msg(self.ls_proc, req.model_dump())
         
         self.cell_count += 1

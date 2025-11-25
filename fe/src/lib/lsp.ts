@@ -54,7 +54,6 @@ class LSPManager {
                 return new Promise<any>((resolve) => {
                     this.pendingRequests.set(id, (response) => {
                         const items = response.result?.items || [];
-                        console.debug("Received completions from LSP:", items);
                         resolve({
                             suggestions: items.map((item: any) => ({
                                 label: item.label,
