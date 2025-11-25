@@ -98,10 +98,9 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({ initialCode, onCh
       minimap: { enabled: false },
       lineDecorationsWidth: 8,
       folding: false,
-      padding: { top: 8, bottom: 8 },
       quickSuggestions: false,
       scrollbar: {
-        vertical: 'visible',
+        vertical: 'auto',
         horizontal: 'hidden',
         useShadows: false,
         verticalScrollbarSize: 6,
@@ -155,9 +154,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({ initialCode, onCh
   return (
     <div className="rounded-sm border h-30 bg-white">
       <div className="p-2 h-full">
-        {/* Monaco anchor: nearest positioned ancestor */}
         <div className="relative h-full overflow-visible pr-20">
-          {/* The actual Monaco mount point */}
           <div ref={domRef} className="w-full h-full overflow-visible"></div>
         </div>
       </div>
